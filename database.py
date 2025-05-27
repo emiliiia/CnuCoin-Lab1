@@ -11,197 +11,257 @@ from cryptography.hazmat.primitives.serialization import (
 )
 import hashlib
 import sqlite3
-import time
+import datetime
+import random
+import os
 
+# Ініціалізація бази даних
 def init_db():
-    conn = sqlite3.connect('CNUCoin.db')
+    DB_PATH = os.path.abspath('cnucoin.db')
+    conn = sqlite3.connect(DB_PATH)
     cursor = conn.cursor()
     
-    cursor.execute('''CREATE TABLE IF NOT EXISTS CNUCoinMemberTable
-                    (CNUCoinID INTEGER PRIMARY KEY AUTOINCREMENT,
-                     PPhQL1CKey TEXT NOT NULL,
-                     Tshiner INTEGER DEFAULT 0,
-                     Balance REAL DEFAULT 100.0)''')
+    # Створення таблиць
+    tables = [
+        '''CREATE TABLE IF NOT EXISTS CnuCoinMembersTable (
+            CNUCoinID INTEGER PRIMARY KEY,
+            PublicKey TEXT NOT NULL,
+            IsMiner BOOLEAN NOT NULL DEFAULT 0
+        )''',
+        
+        '''CREATE TABLE IF NOT EXISTS PrivateTable (
+            CNUCoinID INTEGER PRIMARY KEY,
+            PrivateKey TEXT NOT NULL,
+            PublicKey TEXT NOT NULL,
+            FOREIGN KEY (CNUCoinID) REFERENCES CnuCoinMembersTable(CNUCoinID)
+        )''',
+        
+        '''CREATE TABLE IF NOT EXISTS EWalletTable (
+            CNUCoinID INTEGER,
+            TransactionDate DATETIME NOT NULL,
+            FromAddress INTEGER,
+            ToAddress INTEGER NOT NULL,
+            Amount REAL,  
+            FOREIGN KEY (CNUCoinID) REFERENCES CnuCoinMembersTable(CNUCoinID)
+        )''',
+        
+        '''CREATE TABLE IF NOT EXISTS TransactionsTable (
+            CNUCoinID INTEGER,
+            TransactionDateTime DATETIME NOT NULL,
+            TADNum INTEGER PRIMARY KEY AUTOINCREMENT,
+            FromAddress INTEGER NOT NULL,
+            ToAddress INTEGER NOT NULL,
+            TAHash TEXT,
+            Nonce INTEGER,
+            TApproved BOOLEAN DEFAULT 0,
+            Assign TEXT,
+            ASum REAL,  
+            FOREIGN KEY (CNUCoinID) REFERENCES CnuCoinMembersTable(CNUCoinID)
+        )''',
+        
+        '''CREATE TABLE IF NOT EXISTS BlockChainTable (
+            MineID INTEGER,
+            DateTime DATETIME NOT NULL,
+            BlockChainHash TEXT,
+            Nonce INTEGER,
+            Blockssign TEXT,
+            FOREIGN KEY (MineID) REFERENCES CnuCoinMembersTable(CNUCoinID)
+        )'''
+    ]
     
-    cursor.execute('''CREATE TABLE IF NOT EXISTS PrivateTable
-                    (CNUCoinID INTEGER PRIMARY KEY,
-                     PrivateKey TEXT NOT NULL,
-                     FOREIGN KEY(CNUCoinID) REFERENCES CNUCoinMemberTable(CNUCoinID))''')
+    for table in tables:
+        cursor.execute(table)
     
-    cursor.execute('''CREATE TABLE IF NOT EXISTS TransactionTable
-                    (TAID INTEGER PRIMARY KEY AUTOINCREMENT,
-                     CNUCoinID INTEGER,
-                     TADate TEXT,
-                     FromAddr INTEGER,
-                     ToAddr INTEGER,
-                     TASum REAL,
-                     TAMash TEXT,
-                     Nonce INTEGER,
-                     TAApproved INTEGER DEFAULT 0,
-                     TASign TEXT,
-                     FOREIGN KEY(CNUCoinID) REFERENCES CNUCoinMemberTable(CNUCoinID))''')
-    
-    cursor.execute('''CREATE TABLE IF NOT EXISTS BlockChainTable
-                    (HlineTID INTEGER PRIMARY KEY AUTOINCREMENT,
-                     DateTime TEXT,
-                     BlockChainHash TEXT,
-                     Nonce INTEGER,
-                     BlockSign TEXT)''')
+    # Ініціалізація BlockChainTable
+    cursor.execute('SELECT COUNT(*) FROM BlockChainTable')
+    if cursor.fetchone()[0] == 0:
+        cursor.execute('''
+        INSERT INTO BlockChainTable (MineID, DateTime, BlockChainHash, Nonce, Blockssign)
+        VALUES (0, datetime('now'), '0', 0, '0')
+        ''')
     
     conn.commit()
     conn.close()
 
-def register_user(is_miner=False, initial_balance=100.0):
+def generate_user(is_miner=False):
+    # Генерування ключів RSA
     private_key = rsa.generate_private_key(
         public_exponent=65537,
         key_size=2048
     )
     public_key = private_key.public_key()
     
-    pem_public = public_key.public_bytes(
-        encoding=Encoding.PEM,
-        format=PublicFormat.SubjectPublicKeyInfo
-    ).decode('utf-8')
-
-    pem_private = private_key.private_bytes(
+    # Серіалізація ключів
+    private_pem = private_key.private_bytes(
         encoding=Encoding.PEM,
         format=PrivateFormat.PKCS8,
         encryption_algorithm=NoEncryption()
     ).decode('utf-8')
     
-    conn = sqlite3.connect('CNUCoin.db')
+    public_pem = public_key.public_bytes(
+        encoding=Encoding.PEM,
+        format=PublicFormat.SubjectPublicKeyInfo
+    ).decode('utf-8')
+    
+    # Генерування CNUCoinID як хешу публічного ключа
+    public_key_bytes = public_pem.encode('utf-8')
+   
+    # Генеруємо CNUCoinID як 32-бітне число (8 символів MD5 у hex)
+    md5_hash = hashlib.md5(public_key_bytes).hexdigest()
+    cnu_coin_id = int(md5_hash[:8], 16)  # Обмежуємо до 8 символів (32 біти)
+
+    # Збереження в базу даних
+    conn = sqlite3.connect('cnucoin.db')
     cursor = conn.cursor()
     
-    cursor.execute("INSERT INTO CNUCoinMemberTable (PPhQL1CKey, Tshiner, Balance) VALUES (?, ?, ?)",
-                   (pem_public, 1 if is_miner else 0, initial_balance))
-    user_id = cursor.lastrowid
+    cursor.execute('''
+    INSERT INTO CnuCoinMembersTable (CNUCoinID, PublicKey, IsMiner)
+    VALUES (?, ?, ?)
+    ''', (cnu_coin_id, public_pem, is_miner))
     
-    cursor.execute("INSERT INTO PrivateTable VALUES (?, ?)",
-                   (user_id, pem_private))
+    cursor.execute('''
+    INSERT INTO PrivateTable (CNUCoinID, PrivateKey, PublicKey)
+    VALUES (?, ?, ?)
+    ''', (cnu_coin_id, private_pem, public_pem))
+    
+    # Нарахування початкових коштів (100 CNUCoin)
+    cursor.execute('''
+    INSERT INTO EWalletTable (CNUCoinID, TransactionDate, FromAddress, ToAddress, Amount)
+    VALUES (?, ?, 0, ?, 100.0)
+    ''', (cnu_coin_id, datetime.datetime.now(), cnu_coin_id))
     
     conn.commit()
     conn.close()
-    return user_id
+    
+    return cnu_coin_id
 
-def create_transaction(sender_id, receiver_id, amount):
-    conn = sqlite3.connect('CNUCoin.db')
+
+def create_transaction(from_id, to_id, amount):
+    conn = sqlite3.connect('cnucoin.db')
     cursor = conn.cursor()
     
-    # Check balance
-    cursor.execute("SELECT Balance FROM CNUCoinMemberTable WHERE CNUCoinID=?", (sender_id,))
-    sender_balance = cursor.fetchone()[0]
+    # Перевірка балансу
+    cursor.execute('''
+    SELECT SUM(Amount) FROM EWalletTable 
+    WHERE ToAddress = ? AND CNUCoinID = ?
+    ''', (from_id, from_id))
+    balance = cursor.fetchone()[0] or 0
     
-    if sender_balance < amount:
-        conn.close()
-        raise ValueError("Недостатньо коштів!")
+    cursor.execute('''
+    SELECT SUM(Amount) FROM EWalletTable 
+    WHERE FromAddress = ? AND CNUCoinID = ?
+    ''', (from_id, from_id))
+    spent = cursor.fetchone()[0] or 0
     
-    # Get last block
-    cursor.execute("SELECT BlockChainHash, Nonce FROM BlockChainTable ORDER BY HlineTID DESC LIMIT 1")
-    last_block = cursor.fetchone()
-    prev_hash, prev_nonce = last_block if last_block else ("0", 0)
+    available = balance - spent
+    if available < amount:
+        raise ValueError("Недостатньо коштів для транзакції")
     
-    # Prepare transaction data
-    transaction_data = f"{sender_id}{receiver_id}{amount}{prev_hash}{prev_nonce}"
-    ta_hash = hashlib.sha256(transaction_data.encode()).hexdigest()
-    
-    # Get private key
-    cursor.execute("SELECT PrivateKey FROM PrivateTable WHERE CNUCoinID=?", (sender_id,))
+    # Отримання приватного ключа відправника
+    cursor.execute('''
+    SELECT PrivateKey FROM PrivateTable WHERE CNUCoinID = ?
+    ''', (from_id,))
     private_key_pem = cursor.fetchone()[0]
-    private_key = load_pem_private_key(private_key_pem.encode(), password=None)
     
-    # Sign transaction
+    private_key = load_pem_private_key(
+        private_key_pem.encode('utf-8'),
+        password=None
+    )
+    
+    # Отримання останнього хешу блокчейну
+    cursor.execute('SELECT BlockChainHash, Nonce FROM BlockChainTable ORDER BY DateTime DESC LIMIT 1')
+    last_block = cursor.fetchone()
+    block_chain_hash = last_block[0] if last_block else '0'
+    nonce = last_block[1] if last_block else 0
+    
+    # Створення транзакції
+    transaction_data = {
+        'from': from_id,
+        'to': to_id,
+        'amount': amount,
+        'block_chain_hash': block_chain_hash,
+        'nonce': nonce,
+        'timestamp': datetime.datetime.now().isoformat()
+    }
+    
+    # Хешування транзакції
+    transaction_str = f"{from_id}{to_id}{amount}{block_chain_hash}{nonce}"
+    transaction_hash = hashlib.md5(transaction_str.encode('utf-8')).hexdigest()
+    
+    # Підпис транзакції
     signature = private_key.sign(
-        transaction_data.encode(),
+        transaction_hash.encode('utf-8'),
         padding.PSS(
             mgf=padding.MGF1(hashes.SHA256()),
             salt_length=padding.PSS.MAX_LENGTH
         ),
         hashes.SHA256()
-    ).hex()
+    )
     
-    # Add transaction
-    cursor.execute('''INSERT INTO TransactionTable 
-                    (CNUCoinID, TADate, FromAddr, ToAddr, TASum, TAMash, Nonce, TASign)
-                    VALUES (?, datetime('now'), ?, ?, ?, ?, ?, ?)''',
-                 (sender_id, sender_id, receiver_id, amount, ta_hash, prev_nonce, signature))
+    # Збереження транзакції
+    cursor.execute('''
+    INSERT INTO TransactionsTable (
+        CNUCoinID, TransactionDateTime, FromAddress, ToAddress, 
+        TAHash, Nonce, TApproved, Assign, ASum
+    )
+    VALUES (?, ?, ?, ?, ?, ?, 0, ?, ?)
+    ''', (
+        from_id,
+        datetime.datetime.now(),
+        from_id,
+        to_id,
+        transaction_hash,
+        random.randint(0, 2**32),
+        signature.hex(),
+        amount  # Додаємо суму транзакції
+    ))
     
-    # Update balances
-    cursor.execute("UPDATE CNUCoinMemberTable SET Balance = Balance - ? WHERE CNUCoinID=?", (amount, sender_id))
-    cursor.execute("UPDATE CNUCoinMemberTable SET Balance = Balance + ? WHERE CNUCoinID=?", (amount, receiver_id))
+    # Оновлення BlockChainTable
+    new_block_chain_hash = hashlib.md5((block_chain_hash + transaction_hash).encode('utf-8')).hexdigest()
+    
+    cursor.execute('''
+    INSERT INTO BlockChainTable (MineID, DateTime, BlockChainHash, Nonce, Blockssign)
+    VALUES (?, ?, ?, ?, ?)
+    ''', (
+        from_id,
+        datetime.datetime.now(),
+        new_block_chain_hash,
+        random.randint(0, 2**32),  # Новий Nonce
+        signature.hex()
+    ))
     
     conn.commit()
     conn.close()
-    return ta_hash
+    
+    return transaction_hash
 
-def mine_block(difficulty=2):
-    """Функція майнінгу з Proof-of-Work"""
-    conn = sqlite3.connect('CNUCoin.db')
+def approve_transaction(miner_id, transaction_id):
+    conn = sqlite3.connect('cnucoin.db')
     cursor = conn.cursor()
     
-    # Get unapproved transactions
-    cursor.execute("SELECT TAMash FROM TransactionTable WHERE TAApproved=0")
-    transactions = [tx[0] for tx in cursor.fetchall()]
+    # Перевірка майнера
+    cursor.execute('SELECT IsMiner FROM CnuCoinMembersTable WHERE CNUCoinID = ?', (miner_id,))
+    is_miner = cursor.fetchone()[0]
+    if not is_miner:
+        raise ValueError("Тільки майнери можуть підтверджувати транзакції")
     
-    if not transactions:
-        conn.close()
-        return False
+    # Отримання даних транзакції (тепер з ASum)
+    cursor.execute('''
+    SELECT FromAddress, ToAddress, ASum FROM TransactionsTable WHERE TADNum = ?
+    ''', (transaction_id,))
+    from_addr, to_addr, amount = cursor.fetchone()
     
-    # Get last block
-    cursor.execute("SELECT BlockChainHash, Nonce FROM BlockChainTable ORDER BY HlineTID DESC LIMIT 1")
-    last_block = cursor.fetchone()
-    prev_hash, prev_nonce = last_block if last_block else ("0", 0)
+    if amount is None:
+        raise ValueError("Сума транзакції не визначена")
     
-    target = '0' * difficulty
-    nonce = 0
-    start_time = time.time()
+    # Оновлення статусу транзакції
+    cursor.execute('UPDATE TransactionsTable SET TApproved = 1 WHERE TADNum = ?', (transaction_id,))
     
-    while True:
-        block_data = f"{prev_hash}{''.join(transactions)}{nonce}"
-        block_hash = hashlib.sha256(block_data.encode()).hexdigest()
-        
-        if block_hash.startswith(target):
-            # Add new block
-            cursor.execute('''INSERT INTO BlockChainTable 
-                            (DateTime, BlockChainHash, Nonce)
-                            VALUES (datetime('now'), ?, ?)''',
-                         (block_hash, nonce))
-            
-            # Mark transactions as approved
-            cursor.execute("UPDATE TransactionTable SET TAApproved=1 WHERE TAApproved=0")
-            
-            conn.commit()
-            conn.close()
-            print(f"Блок знайдено! Nonce: {nonce}, час: {time.time()-start_time:.2f} сек")
-            return True
-        
-        nonce += 1
-        if nonce % 100000 == 0:  # Progress indicator
-            print(f"Перевірено {nonce} значень...")
-
-def verify_transaction(sender_id, transaction_data, signature):
-    """Перевірка підпису транзакції"""
-    conn = sqlite3.connect('CNUCoin.db')
-    cursor = conn.cursor()
+    # Додавання запису до гаманця
+    cursor.execute('''
+    INSERT INTO EWalletTable (CNUCoinID, TransactionDate, FromAddress, ToAddress, Amount)
+    VALUES (?, ?, ?, ?, ?)
+    ''', (to_addr, datetime.datetime.now(), from_addr, to_addr, amount))
     
-    try:
-        # Get public key
-        cursor.execute("SELECT PPhQL1CKey FROM CNUCoinMemberTable WHERE CNUCoinID=?", (sender_id,))
-        public_key_pem = cursor.fetchone()[0]
-        public_key = load_pem_public_key(public_key_pem.encode())
-        
-        # Verify signature
-        public_key.verify(
-            bytes.fromhex(signature),
-            transaction_data.encode(),
-            padding.PSS(
-                mgf=padding.MGF1(hashes.SHA256()),
-                salt_length=padding.PSS.MAX_LENGTH
-            ),
-            hashes.SHA256()
-        )
-        return True
-    except Exception as e:
-        print(f"Помилка перевірки: {e}")
-        return False
-    finally:
-        conn.close()
+    conn.commit()
+    conn.close()
