@@ -9,11 +9,12 @@ from cryptography.hazmat.primitives.serialization import (
     PrivateFormat,
     NoEncryption
 )
-import hashlib
 import sqlite3
 import datetime
 import random
 import os
+import hashlib
+import time
 
 # Ініціалізація бази даних
 def init_db():
@@ -265,3 +266,65 @@ def approve_transaction(miner_id, transaction_id):
     
     conn.commit()
     conn.close()
+
+def mine_block(miner_id):
+    conn = sqlite3.connect('cnucoin.db')
+    cursor = conn.cursor()
+    
+    # 1. Отримання першої непідтвердженої транзакції
+    cursor.execute('''
+    SELECT TADNum, FromAddress, ToAddress, ASum, TAHash 
+    FROM TransactionsTable 
+    WHERE TApproved = 0 
+    ORDER BY TransactionDateTime ASC 
+    LIMIT 1
+    ''')
+    transaction = cursor.fetchone()
+    
+    if not transaction:
+        return "Немає транзакцій для підтвердження"
+    
+    tad_num, from_addr, to_addr, asum, ta_hash = transaction
+    
+    # 2. Отримання останнього хешу блокчейну
+    cursor.execute('SELECT BlockChainHash, Nonce FROM BlockChainTable ORDER BY DateTime DESC LIMIT 1')
+    last_block = cursor.fetchone()
+    block_chain_hash = last_block[0] if last_block else '0'
+    nonce = 0
+    
+    # 3. Підбір Nonce (майнінг)
+    start_time = time.time()
+    while True:
+        data = f"{ta_hash}{block_chain_hash}{nonce}".encode()
+        new_hash = hashlib.sha256(data).hexdigest()
+        
+        if new_hash.startswith('0'):  # Умова складності
+            break
+        nonce += 1
+    
+    mining_time = time.time() - start_time
+    
+    # 4. Запис нового блоку
+    cursor.execute('''
+    INSERT INTO BlockChainTable (MineID, DateTime, BlockChainHash, Nonce)
+    VALUES (?, ?, ?, ?)
+    ''', (miner_id, datetime.datetime.now(), new_hash, nonce))
+    
+    # 5. Підтвердження транзакції
+    cursor.execute('UPDATE TransactionsTable SET TApproved = 1 WHERE TADNum = ?', (tad_num,))
+    
+    # 6. Винагорода майнеру (1 CNUCoin)
+    cursor.execute('''
+    INSERT INTO EWalletTable (CNUCoinID, TransactionDate, FromAddress, ToAddress, Amount)
+    VALUES (?, ?, 0, ?, 1.0)
+    ''', (miner_id, datetime.datetime.now(), miner_id))
+    
+    conn.commit()
+    conn.close()
+    
+    return {
+        'transaction_id': tad_num,
+        'new_block_hash': new_hash,
+        'nonce': nonce,
+        'mining_time': f"{mining_time:.2f} сек"
+    }
